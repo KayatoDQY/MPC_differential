@@ -19,21 +19,12 @@
 #include "qp.hpp"
 #include <chrono>
 
-#include <sensor_msgs/LaserScan.h>
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
-#include <pcl/kdtree/kdtree_flann.h>
-#include <pcl_conversions/pcl_conversions.h>
-#include <mutex>
-
 #define PI 3.14159265359
 ros::Publisher odom_path_pub, pre_path_pub, cmd_vel_pub, transformed_path_pub;
 
 ros::Subscriber odom_sub, refer_path_sub;
 nav_msgs::Path odom_path;
 std::vector<geometry_msgs::PoseStamped> original_path;
-
-pcl::PointCloud<pcl::PointXY>::Ptr obstacle_cloud(new pcl::PointCloud<pcl::PointXY>);
 
 constexpr unsigned short STATE_NUM = 3;
 constexpr unsigned short CTRL_NUM = 2;
@@ -94,7 +85,6 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr &odom_msg, tf2_ros::Buffer 
 
 	try
 	{
-
 		tf2::Quaternion quat;
 		quat.setX(odom_msg->pose.pose.orientation.x);
 		quat.setY(odom_msg->pose.pose.orientation.y);
@@ -131,7 +121,6 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr &odom_msg, tf2_ros::Buffer 
 			tf2::doTransform(pose, transformed_pose, transform);
 			transformed_path.poses.push_back(transformed_pose);
 		}
-		
 		convertPathToXRef(transformed_path);
 		transformed_path_pub.publish(transformed_path);
 	}
@@ -160,7 +149,7 @@ int main(int argc, char **argv)
 	transformed_path_pub = n.advertise<nav_msgs::Path>("/transformed_path", 100);
 	odom_path_pub = n.advertise<nav_msgs::Path>("/odom_path", 100);
 	pre_path_pub = n.advertise<nav_msgs::Path>("/pre_path", 100);
-	ros::Subscriber scan_sub = n.subscribe("/scan", 1, scanCallback);
+
 	refer_path_sub = n.subscribe<nav_msgs::Path>("/trajectory", 100, pathCallback);
 	odom_sub = n.subscribe<nav_msgs::Odometry>(
 		"/odom", 100, boost::bind(odomCallback, _1, boost::ref(tf_buffer)));
@@ -196,11 +185,10 @@ int main(int argc, char **argv)
 			{
 
 				double yaw_error = xref.at(0)[2];
-				// if (yaw_error < PI / 3 && yaw_error > -PI / 3)
 				if (yaw_error < PI / 3 && yaw_error > -PI / 3)
 				{
 					MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW> MPC_Solver(Q, R, xMax, xMin, uMax, uMin);
-					MPC_Solver.set_x_xref(x0, out, xref); // out0 has no use
+					MPC_Solver.set_x_xref(x0, out, xref);
 					out = MPC_Solver.Solver();
 					geometry_msgs::Twist vel_msg;
 					vel_msg.linear.x = out(STATE_NUM * (MPC_WINDOW + 1));

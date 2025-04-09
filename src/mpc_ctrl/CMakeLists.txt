@@ -18,7 +18,10 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   tf2
   tf2_ros
+  sensor_msgs
+  
 )
+find_package(PCL REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(OsqpEigen REQUIRED)
 
@@ -33,6 +36,7 @@ include_directories(
   include 
   ${catkin_INCLUDE_DIRS}
   ${Eigen3_INCLUDE_DIRS}
+  ${PCL_INCLUDE_DIRS}
 )
 add_executable(mpc_node
   src/mpc_node.cc
@@ -41,6 +45,7 @@ add_dependencies(mpc_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_
 target_link_libraries(mpc_node
   ${catkin_LIBRARIES}
   ${EIGEN3_LIBRARIES}
+  ${PCL_LIBRARIES}
   OsqpEigen::OsqpEigen
 )
 

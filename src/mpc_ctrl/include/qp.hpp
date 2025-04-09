@@ -180,8 +180,11 @@ Eigen::VectorXd MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::Solver()
         else
         {
             QPSolution = solver.getSolution();
-            Eigen::VectorXd ctr = QPSolution.segment(
-                static_cast<Eigen::Index>(STATE_NUM * (MPC_WINDOW +1)), CTRL_NUM);
+            //Eigen::VectorXd ctr = QPSolution.segment(
+            //    static_cast<Eigen::Index>(STATE_NUM * (MPC_WINDOW + 1)), CTRL_NUM);
+            Eigen::VectorXd ctr=QPSolution.segment(
+                0, STATE_NUM * (MPC_WINDOW + 1)+CTRL_NUM);
+                
             return ctr;
         }
     }
@@ -198,8 +201,8 @@ template <unsigned short STATE_NUM, unsigned short CTRL_NUM, unsigned short MPC_
 void MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::setDynamicsMatrices()
 {
     // x0 [x,y,th]
-    double ts = 0.02;
-    a << 1, 0, - sin(x0[2]) * ts,
+    double ts = 0.1;
+    a << 1, 0, -sin(x0[2]) * ts,
         0, 1, cos(x0[2]) * ts,
         0, 0, 1;
     b << cos(x0[2]) * ts, 0,

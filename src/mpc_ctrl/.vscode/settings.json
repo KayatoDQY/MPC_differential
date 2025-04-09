@@ -1,0 +1,16 @@
+{
+    "files.associations": {
+        "array": "cpp",
+        "string_view": "cpp",
+        "string": "cpp",
+        "vector": "cpp",
+        "deque": "cpp",
+        "cmath": "cpp",
+        "complex": "cpp",
+        "*.ipp": "cpp",
+        "bitset": "cpp",
+        "initializer_list": "cpp",
+        "ranges": "cpp",
+        "utility": "cpp"
+    }
+}
