@@ -6,10 +6,12 @@
 #include <vector>
 #include <mutex>
 #include <queue>
+#include <string.h>
 #include <algorithm>
 #include <climits>
 #include <cmath>
 #include <chrono>
+#include <array>
 
 #include <ros/ros.h>
 #include <tf/tf.h>
@@ -29,8 +31,10 @@
 ros::Publisher odom_path_pub, pre_path_pub, cmd_vel_pub, transformed_path_pub;
 
 ros::Subscriber odom_sub, refer_path_sub;
+
 nav_msgs::Path odom_path;
 std::vector<geometry_msgs::PoseStamped> original_path;
+geometry_msgs::PoseStamped original_pose;
 
 constexpr unsigned short STATE_NUM = 3;
 constexpr unsigned short CTRL_NUM = 2;
@@ -41,24 +45,25 @@ Eigen::Matrix<double, STATE_NUM, 1> x0;
 double pitch = 0, roll = 0;
 
 bool grid_map[100][100] = {false};
+constexpr double resolution = 0.1;
+constexpr unsigned short radius = 4;
+constexpr unsigned short squared_radius = radius * radius;
 
-const double resolution = 0.1;
 std::mutex odom_mutex_, scan_mutex_, path_mutex_;
-geometry_msgs::PoseStamped original_pose;
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr &scan_msg)
 {
 	scan_mutex_.lock();
 	const int radius = 3;
 	const int squared_radius = radius * radius;
-    //重置网格地图
-	for (int i = 0; i < 100; ++i)	
+	// 重置网格地图
+	for (int i = 0; i < 100; ++i)
 	{
 		for (int j = 0; j < 100; ++j)
 		{
 			grid_map[i][j] = false;
 		}
 	}
-	//将激光雷达数据转换为网格地图
+	// 将激光雷达数据转换为网格地图
 	for (size_t i = 0; i < scan_msg->ranges.size(); ++i)
 	{
 		double angle = scan_msg->angle_min + i * scan_msg->angle_increment;
@@ -165,7 +170,7 @@ std::vector<std::pair<int, int>> aStar(int target_x, int target_y)
 		adjusted_y = adjusted_target.second;
 	}
 	else if (grid_map[adjusted_x][adjusted_y])
-	{	
+	{
 		ROS_WARN("Target is blocked!");
 		return {};
 	}
@@ -241,7 +246,6 @@ std::vector<std::pair<int, int>> aStar(int target_x, int target_y)
 	ROS_WARN("No path found!");
 	return {};
 }
-
 static int findClosestPathIndex(const geometry_msgs::Pose &odom_pose)
 {
 	double min_distance = std::numeric_limits<double>::max();
@@ -272,60 +276,164 @@ static void move_goal_pathCallback(const geometry_msgs::PoseStamped::ConstPtr &g
 {
 	original_pose = *goal_msg;
 }
-void convertPathToXRef(const nav_msgs::Path &transformed_path)
+static void convertPathToXRef(const nav_msgs::Path &transformed_path)
 {
+	double V_MAX = 0.5;
+	double CTRL_DT = 0.1;
 	path_mutex_.lock();
 	xref.clear();
-	for (const auto &pose : transformed_path.poses)
-	{
-		Eigen::Matrix<double, STATE_NUM, 1> state;
-		state(0) = pose.pose.position.x;
-		state(1) = pose.pose.position.y;
-		state(2) = tf::getYaw(pose.pose.orientation);
-		xref.push_back(state);
-	}
-	if (xref.size() <= MPC_WINDOW)
-	{
 
-		const Eigen::Matrix<double, STATE_NUM, 1> &last_state = xref.back();
-		const size_t needed = MPC_WINDOW - xref.size();
-		for (size_t i = 0; i <= needed; ++i)
+	if (!transformed_path.poses.empty())
+	{
+		Eigen::Matrix<double, STATE_NUM, 1> last_state;
+		last_state(0) = transformed_path.poses[0].pose.position.x;
+		last_state(1) = transformed_path.poses[0].pose.position.y;
+		last_state(2) = tf::getYaw(transformed_path.poses[0].pose.orientation);
+		xref.push_back(last_state);
+
+		for (size_t i = 1; i < transformed_path.poses.size(); ++i)
 		{
-			xref.push_back(last_state);
+			const auto &prev_pose = transformed_path.poses[i - 1];
+			const auto &curr_pose = transformed_path.poses[i];
+
+			const double x0 = prev_pose.pose.position.x;
+			const double y0 = prev_pose.pose.position.y;
+			const double x1 = curr_pose.pose.position.x;
+			const double y1 = curr_pose.pose.position.y;
+			const double yaw0 = tf::getYaw(prev_pose.pose.orientation);
+			const double dx = x1 - x0;
+			const double dy = y1 - y0;
+			const double dist = hypot(dx, dy);
+			const int interp_steps = std::max(1,
+											  static_cast<int>(dist / (V_MAX * CTRL_DT)));
+
+			for (int j = 1; j <= interp_steps; ++j)
+			{
+				const double ratio = static_cast<double>(j) / interp_steps;
+				Eigen::Matrix<double, STATE_NUM, 1> state;
+
+				state(0) = x0 + dx * ratio;
+				state(1) = y0 + dy * ratio;
+
+				state(2) = yaw0;
+				xref.push_back(state);
+				if (xref.size() >= MPC_WINDOW)
+					break;
+			}
+			if (xref.size() >= MPC_WINDOW)
+				break;
 		}
+	}
+
+	const size_t current_size = xref.size();
+	if (current_size <= MPC_WINDOW)
+	{
+		const auto &last = xref.back();
+		xref.resize(MPC_WINDOW + 1, last);
+	}
+	else if (current_size > MPC_WINDOW)
+	{
+		xref.resize(MPC_WINDOW);
 	}
 	path_mutex_.unlock();
 }
-nav_msgs::Path convertPath(const std::vector<std::pair<int, int>> &grid_path)
+static bool isPathClear(const std::pair<int, int> &start, const std::pair<int, int> &end)
+{
+	int x0 = start.first, y0 = start.second;
+	int x1 = end.first, y1 = end.second;
+
+	int dx = abs(x1 - x0);
+	int dy = abs(y1 - y0);
+	int sx = x0 < x1 ? 1 : -1;
+	int sy = y0 < y1 ? 1 : -1;
+	int err = dx - dy;
+
+	while (true)
+	{
+		if (grid_map[x0][y0])
+			return false;
+
+		if (x0 == x1 && y0 == y1)
+			break;
+
+		int e2 = 2 * err;
+		if (e2 > -dy)
+		{
+			err -= dy;
+			x0 += sx;
+		}
+		if (e2 < dx)
+		{
+			err += dx;
+			y0 += sy;
+		}
+	}
+	return true;
+}
+static std::vector<std::pair<int, int>> simplifyPath(const std::vector<std::pair<int, int>> &grid_path)
+{
+	std::vector<std::pair<int, int>> simplified;
+	if (grid_path.empty())
+		return simplified;
+
+	size_t n = grid_path.size();
+	size_t current = 0;
+	simplified.push_back(grid_path[current]);
+
+	while (current < n - 1)
+	{
+		size_t farthest = current + 1;
+		for (size_t next = current + 1; next < n; ++next)
+		{
+			if (isPathClear(grid_path[current], grid_path[next]))
+			{
+				farthest = next;
+			}
+			else
+			{
+				break;
+			}
+		}
+		if (farthest != current)
+		{
+			simplified.push_back(grid_path[farthest]);
+			current = farthest;
+		}
+		else
+		{
+			simplified.push_back(grid_path[current + 1]);
+			current++;
+		}
+	}
+
+	return simplified;
+}
+static nav_msgs::Path convertPath(const std::vector<std::pair<int, int>> &grid_path)
 {
 	nav_msgs::Path map_path;
 	map_path.header.stamp = ros::Time::now();
 	map_path.header.frame_id = "livox_frame";
 
 	if (grid_path.empty())
+	{
 		return map_path;
+	}
 	map_path.poses.reserve(grid_path.size());
 	double last_valid_yaw = 0.0;
-
 	for (size_t i = 0; i < grid_path.size(); ++i)
 	{
 		geometry_msgs::PoseStamped pose;
 		pose.header = map_path.header;
 
-		// 坐标转换
 		const auto &pt = grid_path[i];
 		pose.pose.position.x = (pt.first - 50) * resolution;
 		pose.pose.position.y = (pt.second - 50) * resolution;
-
-		// 偏航角计算逻辑
 		double yaw = 0.0;
 		if (i < grid_path.size() - 1)
 		{
-			// 计算当前点到下个点的方向
 			const auto &next_pt = grid_path[i + 1];
 			const double dx = (next_pt.first - pt.first) * resolution;
 			const double dy = (next_pt.second - pt.second) * resolution;
-
 			if (dx != 0 || dy != 0)
 			{
 				yaw = atan2(dy, dx);
@@ -333,12 +441,11 @@ nav_msgs::Path convertPath(const std::vector<std::pair<int, int>> &grid_path)
 			}
 			else
 			{
-				yaw = last_valid_yaw; // 相同点保持先前角度
+				yaw = last_valid_yaw;
 			}
 		}
 		else
 		{
-			// 最后一个点使用倒数第二个点的角度
 			if (grid_path.size() >= 2)
 			{
 				const auto &prev_pt = grid_path[i - 1];
@@ -350,20 +457,16 @@ nav_msgs::Path convertPath(const std::vector<std::pair<int, int>> &grid_path)
 				}
 			}
 		}
-
-		// 角度转四元数
 		tf2::Quaternion q;
 		q.setRPY(0, 0, yaw);
 		pose.pose.orientation = tf2::toMsg(q);
 
 		map_path.poses.push_back(pose);
 	}
-
-	// 处理单点路径的特殊情况
 	if (grid_path.size() == 1)
 	{
 		tf2::Quaternion q;
-		q.setRPY(0, 0, 0); // 默认朝东
+		q.setRPY(0, 0, 0);
 		map_path.poses[0].pose.orientation = tf2::toMsg(q);
 	}
 
@@ -405,7 +508,9 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr &odom_msg, tf2_ros::Buffer 
 			odom_mutex_.unlock();
 			return;
 		}
-		nav_msgs::Path transformed_path = convertPath(aStar_path);
+		auto simplified_path = simplifyPath(aStar_path);
+		simplified_path.push_back(std::make_pair(target_x, target_y));
+		nav_msgs::Path transformed_path = convertPath(simplified_path);
 		convertPathToXRef(transformed_path);
 		transformed_path_pub.publish(transformed_path);
 	}
@@ -466,7 +571,19 @@ int main(int argc, char **argv)
 	const double Kp = 0.5;
 	while (ros::ok())
 	{
-		if (roll <= PI / 6 && roll >= -PI / 6 && pitch <= PI / 6 && pitch >= -PI / 6)
+		bool obs_mark = false;
+		for (auto i = 49; i <= 51; i++)
+		{
+			for (auto j = 49; j <= 51; j++)
+			{
+				if (grid_map[i][j])
+				{
+					obs_mark = true;
+					ROS_INFO("obstacle stop");
+				}
+			}
+		}
+		if (!obs_mark || roll <= PI / 6 && roll >= -PI / 6 && pitch <= PI / 6 && pitch >= -PI / 6)
 		{
 			ROS_INFO("Path size: %zu", xref.size());
 			if (xref.size() > 0)
