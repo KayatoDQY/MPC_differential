@@ -1,0 +1,58 @@
+DealPath deal_path(A_all, b_all, local_path);
+
+            std::vector<Eigen::MatrixXd> A_mpc;
+            std::vector<Eigen::VectorXd> b_mpc;
+            std::vector<Eigen::Matrix<double, STATE_NUM, 1>> xref;
+            double x_r, y_r, yaw_r;
+            for (auto step = 0; step < MPC_WINDOW; step++)
+            {
+
+                Eigen::MatrixXd A_r_0;
+                Eigen::VectorXd b_r_0;
+                Eigen::MatrixXd A_r;
+                Eigen::VectorXd b_r;
+                deal_path.find_step(step, A_r_0, b_r_0, x_r, y_r, yaw_r);
+                A_r = (A_r_0 / map_meta_.resolution).transpose();                                                                 // A 2*n
+                b_r = b_r_0 + A_r_0.transpose() * Eigen::Vector2d(map_meta_.origin_x, map_meta_.origin_y) / map_meta_.resolution; // b n*1
+
+                Eigen::MatrixXd A_new(A_r.rows(), 3);
+                A_new.leftCols(2) = A_r;
+                A_new.col(2).setZero();
+
+                Eigen::MatrixXd yaw_constraints(2, 3);
+                yaw_constraints << 0, 0, -1,
+                    0, 0, 1;
+
+                A_new.conservativeResize(A_new.rows() + 2, Eigen::NoChange);
+                A_new.bottomRows(2) = yaw_constraints;
+
+                b_r.conservativeResize(b_r.size() + 2);
+                b_r.tail<2>() << M_PI, M_PI;
+                Eigen::Matrix<double, STATE_NUM, 1> x_r_eigen;
+                x_r_eigen << x_r, y_r, yaw_r;
+                xref.push_back(x_r_eigen);
+                A_mpc.push_back(A_new);
+                b_mpc.push_back(b_r);
+            }
+            Eigen::Matrix<double, STATE_NUM, 1> x_r_eigen;
+            x_r_eigen << x_r, y_r, yaw_r;
+            xref.push_back(x_r_eigen);
+            MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW> MPC_Solver(Q, R, xMax, xMin, uMax, uMin, A_mpc, b_mpc);
+            MPC_Solver.set_x_xref(x0, out, xref);
+            out = MPC_Solver.Solver();
+            geometry_msgs::Twist vel_msg;
+            vel_msg.linear.x = out(STATE_NUM * (MPC_WINDOW + 1));
+            vel_msg.angular.z = out(STATE_NUM * (MPC_WINDOW + 1) + 1);
+
+            nav_msgs::Path pre_path;
+            for (auto index = 0; index < MPC_WINDOW; index++)
+            {
+                geometry_msgs::PoseStamped pre_pose;
+                pre_pose.pose.position.x = out(index * STATE_NUM);
+                pre_pose.pose.position.y = out(index * STATE_NUM + 1);
+                pre_path.poses.push_back(pre_pose);
+            }
+            pre_path.header.frame_id = "laser";
+            pre_path.header.stamp = ros::Time::now();
+            pre_path_pub.publish(pre_path);
+            cmd_vel_pub.publish(vel_msg);

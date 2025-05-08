@@ -129,8 +129,8 @@ int main(int argc, char **argv)
     Eigen::DiagonalMatrix<double, STATE_NUM> Q;
     Eigen::DiagonalMatrix<double, CTRL_NUM> R;
 
-    uMax << 0.8, PI / 8;
-    uMin << -0.8, -PI / 8;
+    uMax << 0.3, PI / 3;
+    uMin << -0.3, -PI / 3;
     xMax << OsqpEigen::INFTY, OsqpEigen::INFTY, PI;
     xMin << -OsqpEigen::INFTY, -OsqpEigen::INFTY, -PI;
 
@@ -161,7 +161,6 @@ int main(int argc, char **argv)
             std::lock_guard<std::mutex> path_lock(path_mutex_);
             local_path = current_path;
         }
-
         if (local_path && !local_path->poses.empty())
         {
             cv::Scalar path_color(0, 0, 255);
@@ -180,7 +179,7 @@ int main(int argc, char **argv)
 
                 int img_x = static_cast<int>(px);
                 int img_y = static_cast<int>(py);
-
+                
                 if (img_x >= 0 && img_x < map_meta_.width && img_y >= 0 && img_y < map_meta_.height)
                 {
                     cv::Point current_point(img_x, img_y);
@@ -283,70 +282,113 @@ int main(int argc, char **argv)
                     prev_point = current_point;
                 }
             }
-
+            
             DealPath deal_path(A_all, b_all, local_path);
 
             std::vector<Eigen::MatrixXd> A_mpc;
             std::vector<Eigen::VectorXd> b_mpc;
             std::vector<Eigen::Matrix<double, STATE_NUM, 1>> xref;
             double x_r, y_r, yaw_r;
-            for (auto step = 0; step < MPC_WINDOW; step++)
-            {
+// 初始化前一个点的坐标为车辆的当前位置或路径的初始前一个点
+double prev_x = 0; // 假设current_x_是当前车辆x坐标
+double prev_y = 0; // 假设current_y_是当前车辆y坐标
+double prev_yaw = 0; // 假设current_yaw_是当前车辆偏航角
 
-                Eigen::MatrixXd A_r_0;
-                Eigen::VectorXd b_r_0;
-                Eigen::MatrixXd A_r;
-                Eigen::VectorXd b_r;
-                deal_path.find_step(step, A_r_0, b_r_0, x_r, y_r);
-                A_r = (A_r_0 / map_meta_.resolution).transpose();                                                                 // A 2*n
-                b_r = b_r_0 + A_r_0.transpose() * Eigen::Vector2d(map_meta_.origin_x, map_meta_.origin_y) / map_meta_.resolution; // b n*1
+for (auto step = 0; step < MPC_WINDOW; step++)
+{
+    Eigen::MatrixXd A_r_0;
+    Eigen::VectorXd b_r_0;
+    Eigen::MatrixXd A_r;
+    Eigen::VectorXd b_r;
+    deal_path.find_step(step, A_r_0, b_r_0, x_r, y_r);
 
-                Eigen::MatrixXd A_new(A_r.rows(), 3);
-                A_new.leftCols(2) = A_r;
-                A_new.col(2).setZero();
+    // 计算当前点的yaw_r
+    if (step == 0) {
+        // 第一个点，使用初始prev_x和prev_y计算yaw_r
+        yaw_r = atan2(y_r - prev_y, x_r - prev_x);
+    } else if (step == MPC_WINDOW - 1) {
+        // 最后一个点，使用前一个点的yaw_r
+        yaw_r = prev_yaw;
+    } else {
+        // 中间点，使用前一个点坐标计算yaw_r
+        yaw_r = atan2(y_r - prev_y, x_r - prev_x);
+    }
 
-                Eigen::MatrixXd yaw_constraints(2, 3);
-                yaw_constraints << 0, 0, -1,
-                    0, 0, 1;
+    // 更新前一个点的坐标和yaw
+    prev_x = x_r;
+    prev_y = y_r;
+    prev_yaw = yaw_r;
 
-                A_new.conservativeResize(A_new.rows() + 2, Eigen::NoChange);
-                A_new.bottomRows(2) = yaw_constraints;
+    // 以下为原有的矩阵处理逻辑
+    A_r = (A_r_0 / map_meta_.resolution).transpose();                                                                 
+    b_r = b_r_0 + A_r_0.transpose() * Eigen::Vector2d(map_meta_.origin_x, map_meta_.origin_y) / map_meta_.resolution;
 
-                b_r.conservativeResize(b_r.size() + 2);
-                b_r.tail<2>() << M_PI, M_PI;
-                Eigen::Matrix<double, STATE_NUM, 1> x_r_eigen;
-                x_r_eigen << x_r, y_r, yaw_r;
-                xref.push_back(x_r_eigen);
-                A_mpc.push_back(A_new);
-                b_mpc.push_back(b_r);
-            }
+    Eigen::MatrixXd A_new(A_r.rows(), 3);
+    A_new.leftCols(2) = A_r;
+    A_new.col(2).setZero();
+
+    Eigen::MatrixXd yaw_constraints(2, 3);
+    yaw_constraints << 0, 0, -1,
+                       0, 0, 1;
+
+    A_new.conservativeResize(A_new.rows() + 2, Eigen::NoChange);
+    A_new.bottomRows(2) = yaw_constraints;
+
+    b_r.conservativeResize(b_r.size() + 2);
+    b_r.tail<2>() << M_PI, M_PI;
+
+    Eigen::Matrix<double, STATE_NUM, 1> x_r_eigen;
+    x_r_eigen << x_r, y_r, yaw_r;
+    xref.push_back(x_r_eigen);
+    A_mpc.push_back(A_new);
+    b_mpc.push_back(b_r);
+}
             Eigen::Matrix<double, STATE_NUM, 1> x_r_eigen;
             x_r_eigen << x_r, y_r, yaw_r;
             xref.push_back(x_r_eigen);
             MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW> MPC_Solver(Q, R, xMax, xMin, uMax, uMin, A_mpc, b_mpc);
             MPC_Solver.set_x_xref(x0, out, xref);
-            out = MPC_Solver.Solver();
-            geometry_msgs::Twist vel_msg;
-            vel_msg.linear.x = out(STATE_NUM * (MPC_WINDOW + 1));
-            vel_msg.angular.z = out(STATE_NUM * (MPC_WINDOW + 1) + 1);
-
-            nav_msgs::Path pre_path;
-            for (auto index = 0; index < MPC_WINDOW; index++)
+            try
             {
-                geometry_msgs::PoseStamped pre_pose;
-                pre_pose.pose.position.x = out(index * STATE_NUM);
-                pre_pose.pose.position.y = out(index * STATE_NUM + 1);
-                pre_path.poses.push_back(pre_pose);
+                out = MPC_Solver.Solver();
+                geometry_msgs::Twist vel_msg;
+                vel_msg.linear.x = out(STATE_NUM * (MPC_WINDOW + 1));
+                vel_msg.angular.z = out(STATE_NUM * (MPC_WINDOW + 1) + 1);
+                nav_msgs::Path pre_path;
+                for (auto index = 0; index < MPC_WINDOW; index++)
+                {
+                    geometry_msgs::PoseStamped pre_pose;
+                    pre_pose.pose.position.x = out(index * STATE_NUM);
+                    pre_pose.pose.position.y = out(index * STATE_NUM + 1);
+                    pre_path.poses.push_back(pre_pose);
+                }
+                pre_path.header.frame_id = "livox_frame";
+                pre_path.header.stamp = ros::Time::now();
+                pre_path_pub.publish(pre_path);
+                cmd_vel_pub.publish(vel_msg);
             }
-            pre_path.header.frame_id = "livox_frame";
-            pre_path.header.stamp = ros::Time::now();
-            pre_path_pub.publish(pre_path);
+            catch (const std::exception &e)
+            {
+                // 处理求解失败的情况，发送停止cmd_vel
+                geometry_msgs::Twist vel_msg;
+                vel_msg.linear.x = 0.0;
+                vel_msg.angular.z = 0.0;
+                cmd_vel_pub.publish(vel_msg);
+                std::cerr << "Error: " << e.what() << std::endl;
+                continue;
+            }
+        }
+        else
+        {
+            // 发送停止cmd_vel
+            geometry_msgs::Twist vel_msg;
+            vel_msg.linear.x = 0.0;
+            vel_msg.angular.z = 0.0;
             cmd_vel_pub.publish(vel_msg);
         }
-
         if (!color_image.empty())
         {
-            cv::resize(color_image, color_image, cv::Size(1000, 1000));
+            cv::resize(color_image, color_image, cv::Size(500, 500));
             cv::imshow("Occupancy Grid with Path", color_image);
             cv::waitKey(1);
         }

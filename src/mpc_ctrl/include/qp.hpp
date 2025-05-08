@@ -328,3 +328,4 @@ void MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::castMPCToQPConstraintVectors(
 }
 
 #endif
+

@@ -95,8 +95,9 @@ EllipseParams adjustEllipse(const cv::Mat &img, const cv::Point2d &p1, const cv:
     Eigen::Matrix2d E;
     E << radius, 0,
         0, minorAxis;
-
-    while (true)
+    int iteration = 0;
+                        const int max_iterations = 100;
+                        while (iteration++ < max_iterations)
     {
         const cv::Point2d obstacle = findClosestObstacleInEllipse(img, E, center, angle);
         if (obstacle.x < 0 && obstacle.y < 0)
@@ -134,7 +135,6 @@ EllipseParams adjustEllipse(const cv::Mat &img, const cv::Point2d &p1, const cv:
 
         E(1, 1) = minorAxis;
     }
-
     return {E, center, angle};
 }
 
@@ -213,10 +213,6 @@ cv::Point2d find_closest_obstacle_to_rotated_ellipse(
             }
         }
     }
-    if (min_dist < 0.9999)
-    {
-        std::cout << min_dist << std::endl;
-    }
     return closest_point;
 }
 
@@ -240,10 +236,6 @@ EllipseParams expand_ellipse_to_point(const EllipseParams &original,
     const Eigen::Vector2d normalized_point = E.inverse() * rotated_point;
 
     const double scale_factor = normalized_point.norm();
-    if (scale_factor < 0.9999)
-    {
-        std::cout << scale_factor << std::endl;
-    }
     EllipseParams expanded = original;
     expanded.E = E * scale_factor;
     if (expanded.E(0, 0) < 1e-3)

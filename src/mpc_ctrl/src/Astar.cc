@@ -31,7 +31,8 @@ private:
     geometry_msgs::PoseStamped current_goal_;
     bool has_map_ = false;
     bool has_goal_ = false;
-
+    std::mutex map_mutex_;
+    
     struct Node
     {
         int x, y;
@@ -42,6 +43,7 @@ private:
 
     void mapCallback(const nav_msgs::OccupancyGrid::ConstPtr &msg)
     {
+        std::lock_guard<std::mutex> map_lock(map_mutex_);
         current_map_ = msg;
         has_map_ = true;
         tryPlan();
@@ -49,6 +51,7 @@ private:
 
     void goalCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
     {
+        ROS_INFO("GET Goal");
         current_goal_ = *msg;
         has_goal_ = true;
     }
@@ -124,15 +127,15 @@ private:
         size_t n = path.size();
         simplified.push_back(path[0]);
 
-        for (size_t i = 0; i < simplified.size();)
+        for (size_t i = 0; i < path.size();)
         {
             size_t furthest = i;
-            for (size_t j = n - 1; j > i; --j)
+            for (size_t j = i+1; j <path.size();j++)
             {
-                if (isLineClear(path[i].first, path[i].second,
+                if (!isLineClear(path[i].first, path[i].second,
                                 path[j].first, path[j].second))
                 {
-                    furthest = j;
+                    furthest = j-1;
                     break;
                 }
             }
@@ -140,14 +143,15 @@ private:
             if (furthest > i)
             {
                 simplified.push_back(path[furthest]);
-                i = simplified.size() - 1;
+                i = furthest;
             }
             else
             {
-                ++i;
+                simplified.push_back(path[path.size()-1]);
+                break;
             }
+            
         }
-
         return simplified;
     }
 

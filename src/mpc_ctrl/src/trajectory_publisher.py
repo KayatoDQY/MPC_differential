@@ -106,8 +106,8 @@ if __name__ == '__main__':
     try:
         publish_trajectory(
             path_type='custom', 
-            sampling_distance=0.1*0.8,
-            csv_file='~/rounded_quadrilateral_contour.csv'
+            sampling_distance=0.1*0.6,
+            csv_file='~/F5_indoor.csv'
         )
     except rospy.ROSInterruptException:
         pass

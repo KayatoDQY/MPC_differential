@@ -7,7 +7,7 @@
 #include <pcl/filters/crop_box.h>
 #include <pcl/filters/radius_outlier_removal.h>
 #include <pcl/filters/voxel_grid.h>
-
+#include <std_msgs/Bool.h>
 #include <opencv2/opencv.hpp>
 #include <deque>
 
@@ -34,9 +34,15 @@ public:
         nh_.param("crop_z_max", crop_max_.z, 0.3f);
 
         nh_.param("radius", radius_, 0.2f);
+        nh_.param("neighbors", neighbors_, 10.0f);
 
         cloud_sub_ = nh_.subscribe("/ipc/lidar", 1, &PointCloudToOccupancyGrid::cloudCallback, this);
+        
+
         grid_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>("occupancy_grid", 1);
+        bool_pub_ = nh_.advertise<std_msgs::Bool>("need_stop", 100);
+
+        need_stop=false;
     }
 
     void cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg)
@@ -52,7 +58,7 @@ public:
         crop.filter(*filtered_cloud);
 
         cloud_queue_.push_back(filtered_cloud);
-        if (cloud_queue_.size() > 10)
+        if (cloud_queue_.size() > 3)
         {
             cloud_queue_.pop_front();
         }
@@ -68,13 +74,24 @@ public:
         voxel_filter.setInputCloud(accumulated_cloud);
         voxel_filter.setLeafSize(resolution_, resolution_, resolution_);
         voxel_filter.filter(*voxel_cloud);
+        
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filter(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::RadiusOutlierRemoval<pcl::PointXYZ> sor;
+	sor.setInputCloud(voxel_cloud);
+	sor.setRadiusSearch(2*resolution_);
+	sor.setMinNeighborsInRadius(neighbors_);
+	sor.setNegative(false);
+	sor.filter(*cloud_filter);
 
         cv::Mat grid = cv::Mat::zeros(grid_rows_, grid_cols_, CV_8UC1);
-
-        for (const auto &point : *voxel_cloud)
+        bool has_obs=false;
+        for (const auto &point : *cloud_filter)
         {
             if (point.x * point.x + point.y * point.y >= radius_ * radius_)
             {
+                if (point.x>0&&point.x<0.75&&point.y<0.3&&point.y>-0.3){
+                    has_obs=true;
+                }
                 int col = static_cast<int>((point.x - origin_x_) / resolution_);
                 int row = static_cast<int>((point.y - origin_y_) / resolution_);
                 if (col >= 0 && col < grid_cols_ && row >= 0 && row < grid_rows_)
@@ -83,6 +100,13 @@ public:
                 }
             }
         }
+        if(has_obs){
+        ROS_WARN("has obs");
+        }
+        
+        std_msgs::Bool need_stop_msg;
+        need_stop_msg.data=has_obs;
+        bool_pub_.publish(need_stop_msg);
 
         cv::Mat dilated_grid;
         cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE,
@@ -115,7 +139,10 @@ public:
 private:
     ros::NodeHandle nh_;
     ros::Subscriber cloud_sub_;
+    
+
     ros::Publisher grid_pub_;
+    ros::Publisher bool_pub_;
 
     float resolution_;
     float grid_width_, grid_height_;
@@ -125,8 +152,9 @@ private:
     int inflation_pixels_;
     pcl::PointXYZ crop_min_, crop_max_;
     float radius_;
-
+    float neighbors_;
     std::deque<pcl::PointCloud<pcl::PointXYZ>::Ptr> cloud_queue_;
+    bool need_stop;
 };
 
 int main(int argc, char **argv)

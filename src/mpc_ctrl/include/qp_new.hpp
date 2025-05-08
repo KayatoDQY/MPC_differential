@@ -130,9 +130,6 @@ Eigen::VectorXd MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::Solver()
         castMPCToQPGradient();
         castMPCToQPConstraintMatrix();
         castMPCToQPConstraintVectors();
-        std::cout<<linearMatrix.rows()<<","<<linearMatrix.cols()<<std::endl;
-        std::cout<<upperBound.rows()<<","<<upperBound.cols()<<std::endl;
-        std::cout<<lowerBound.rows()<<","<<lowerBound.cols()<<std::endl;
         solver.data()->setNumberOfVariables(STATE_NUM * (MPC_WINDOW + 1) + CTRL_NUM * MPC_WINDOW);
         solver.data()->setNumberOfConstraints(upperBound.rows());
         if (!solver.data()->setHessianMatrix(hessian))
@@ -383,3 +380,4 @@ void MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::castMPCToQPConstraintVectors(
     }
 }
 #endif
+
