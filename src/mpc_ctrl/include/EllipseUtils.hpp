@@ -96,8 +96,8 @@ EllipseParams adjustEllipse(const cv::Mat &img, const cv::Point2d &p1, const cv:
     E << radius, 0,
         0, minorAxis;
     int iteration = 0;
-                        const int max_iterations = 100;
-                        while (iteration++ < max_iterations)
+    const int max_iterations = 100;
+    while (iteration++ < max_iterations)
     {
         const cv::Point2d obstacle = findClosestObstacleInEllipse(img, E, center, angle);
         if (obstacle.x < 0 && obstacle.y < 0)
