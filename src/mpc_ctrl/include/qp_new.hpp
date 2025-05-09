@@ -1,5 +1,5 @@
-#ifndef QP_H
-#define QP_H
+#ifndef QP_NEW_H
+#define QP_NEW_H
 
 #include <OsqpEigen/OsqpEigen.h>
 #include <Eigen/Dense>
@@ -16,7 +16,9 @@ public:
         const Eigen::Matrix<double, STATE_NUM, 1>,
         const Eigen::Matrix<double, STATE_NUM, 1>,
         const Eigen::Matrix<double, CTRL_NUM, 1>,
-        const Eigen::Matrix<double, CTRL_NUM, 1>);
+        const Eigen::Matrix<double, CTRL_NUM, 1>,
+        const std::vector<Eigen::MatrixXd> ,
+        const std::vector<Eigen::VectorXd> );
 
     ~MPC_problem();
 
@@ -48,6 +50,9 @@ private:
     Eigen::VectorXd lowerBound;
     Eigen::VectorXd upperBound;
 
+    std::vector<Eigen::MatrixXd> A_mpc;
+    std::vector<Eigen::VectorXd> b_mpc;
+
     void setDynamicsMatrices();
     void castMPCToQPHessian();
     void castMPCToQPGradient();
@@ -62,13 +67,15 @@ MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::MPC_problem(
     const Eigen::Matrix<double, STATE_NUM, 1> xMax,
     const Eigen::Matrix<double, STATE_NUM, 1> xMin,
     const Eigen::Matrix<double, CTRL_NUM, 1> uMax,
-    const Eigen::Matrix<double, CTRL_NUM, 1> uMin) : Q(Q), R(R), xMax(xMax), xMin(xMin), uMax(uMax), uMin(uMin)
+    const Eigen::Matrix<double, CTRL_NUM, 1> uMin,
+    const std::vector<Eigen::MatrixXd> A_mpc,
+    const std::vector<Eigen::VectorXd> b_mpc)
+    : Q(Q), R(R), xMax(xMax), xMin(xMin), uMax(uMax), uMin(uMin), A_mpc(A_mpc), b_mpc(b_mpc)
 {
     castMPCToQPHessian();
     solver.settings()->setVerbosity(false);
     solver.settings()->setWarmStart(true);
-    solver.data()->setNumberOfVariables(STATE_NUM * (MPC_WINDOW + 1) + CTRL_NUM * MPC_WINDOW);
-    solver.data()->setNumberOfConstraints(2 * STATE_NUM * (MPC_WINDOW + 1) + CTRL_NUM * MPC_WINDOW);
+    
 }
 template <unsigned short STATE_NUM, unsigned short CTRL_NUM, unsigned short MPC_WINDOW>
 MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::~MPC_problem() {}
@@ -123,7 +130,8 @@ Eigen::VectorXd MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::Solver()
         castMPCToQPGradient();
         castMPCToQPConstraintMatrix();
         castMPCToQPConstraintVectors();
-
+        solver.data()->setNumberOfVariables(STATE_NUM * (MPC_WINDOW + 1) + CTRL_NUM * MPC_WINDOW);
+        solver.data()->setNumberOfConstraints(upperBound.rows());
         if (!solver.data()->setHessianMatrix(hessian))
             throw std::runtime_error("Failed to set Hessian matrix.");
         if (!solver.data()->setGradient(gradient))
@@ -180,11 +188,11 @@ Eigen::VectorXd MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::Solver()
         else
         {
             QPSolution = solver.getSolution();
-            //Eigen::VectorXd ctr = QPSolution.segment(
-            //    static_cast<Eigen::Index>(STATE_NUM * (MPC_WINDOW + 1)), CTRL_NUM);
-            Eigen::VectorXd ctr=QPSolution.segment(
-                0, STATE_NUM * (MPC_WINDOW + 1)+CTRL_NUM);
-                
+            // Eigen::VectorXd ctr = QPSolution.segment(
+            //     static_cast<Eigen::Index>(STATE_NUM * (MPC_WINDOW + 1)), CTRL_NUM);
+            Eigen::VectorXd ctr = QPSolution.segment(
+                0, STATE_NUM * (MPC_WINDOW + 1) + CTRL_NUM);
+
             return ctr;
         }
     }
@@ -288,6 +296,30 @@ void MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::castMPCToQPConstraintMatrix()
             static_cast<Eigen::Index>(
                 i)) = 1;
     }
+    size_t total_path_rows = 0;
+    for (const auto& a_mpc : A_mpc) {
+        total_path_rows += a_mpc.rows();
+    }
+    Eigen::MatrixXd originalMatrix = linearMatrix;
+
+    linearMatrix.conservativeResize(
+        originalMatrix.rows() + total_path_rows, 
+        originalMatrix.cols()
+    );
+    Eigen::Index path_row = originalMatrix.rows();
+    for (int step = 0; step < MPC_WINDOW; ++step) {
+        if (step >= A_mpc.size()) break;
+
+        const auto& A_step = A_mpc[step];
+        const Eigen::Index state_col = STATE_NUM * step; 
+
+        for (int r = 0; r < A_step.rows(); ++r) {
+            for (int c = 0; c < STATE_NUM; ++c) {
+                linearMatrix.insert(path_row + r, state_col + c) = A_step(r, c);
+            }
+        }
+        path_row += A_step.rows();
+    }
 }
 template <unsigned short STATE_NUM, unsigned short CTRL_NUM, unsigned short MPC_WINDOW>
 void MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::castMPCToQPConstraintVectors()
@@ -325,7 +357,27 @@ void MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW>::castMPCToQPConstraintVectors(
             static_cast<Eigen::Index>(2 * STATE_NUM * (MPC_WINDOW + 1) + CTRL_NUM * i),
             static_cast<Eigen::Index>(CTRL_NUM)) = uMax;
     }
-}
+    Eigen::VectorXd originalLower = lowerBound;
+    Eigen::VectorXd originalUpper = upperBound;
 
+    size_t b_mpc_total_rows = 0;
+    for (const auto& b_c : b_mpc) {
+        b_mpc_total_rows += b_c.rows();
+    }
+    lowerBound.conservativeResize(originalLower.size() + b_mpc_total_rows);
+    upperBound.conservativeResize(lowerBound.size());
+
+    Eigen::Index path_offset = originalLower.size();
+    for (int step = 0; step < MPC_WINDOW; ++step) {
+        if (step >= b_mpc.size()) break;
+
+        const auto& b_step = b_mpc[step];
+        const int num_rows = b_step.size();
+
+        upperBound.segment(path_offset, num_rows) = b_step;
+        lowerBound.segment(path_offset, num_rows).setConstant(-INFINITY);
+        path_offset += num_rows;
+    }
+}
 #endif
 

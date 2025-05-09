@@ -14,26 +14,22 @@
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <nav_msgs/Path.h>
+#include <std_msgs/Bool.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <nav_msgs/OccupancyGrid.h>
+
 
 #include "qp.hpp"
 #include <chrono>
-
-#include <sensor_msgs/LaserScan.h>
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
-#include <pcl/kdtree/kdtree_flann.h>
-#include <pcl_conversions/pcl_conversions.h>
-#include <mutex>
 
 #define PI 3.14159265359
 ros::Publisher odom_path_pub, pre_path_pub, cmd_vel_pub, transformed_path_pub;
 
 ros::Subscriber odom_sub, refer_path_sub;
+ros::Subscriber need_stop_sub_;
 nav_msgs::Path odom_path;
 std::vector<geometry_msgs::PoseStamped> original_path;
-
-pcl::PointCloud<pcl::PointXY>::Ptr obstacle_cloud(new pcl::PointCloud<pcl::PointXY>);
+bool need_stop=false;
 
 constexpr unsigned short STATE_NUM = 3;
 constexpr unsigned short CTRL_NUM = 2;
@@ -42,12 +38,12 @@ constexpr unsigned short MPC_WINDOW = 50;
 std::vector<Eigen::Matrix<double, STATE_NUM, 1>> xref;
 Eigen::Matrix<double, STATE_NUM, 1> x0;
 double pitch = 0, roll = 0;
-
+size_t goal_index=0;
 static int findClosestPathIndex(const geometry_msgs::Pose &odom_pose)
 {
 	double min_distance = std::numeric_limits<double>::max();
 	int closest_index = 0;
-	for (size_t i = 0; i < original_path.size(); ++i)
+	for (size_t i = goal_index; i < original_path.size(); ++i)
 	{
 		double dx = original_path[i].pose.position.x - odom_pose.position.x;
 		double dy = original_path[i].pose.position.y - odom_pose.position.y;
@@ -58,12 +54,20 @@ static int findClosestPathIndex(const geometry_msgs::Pose &odom_pose)
 			min_distance = distance;
 			closest_index = i;
 		}
+		if(min_distance<0.1){
+			break;
+		}
 	}
 	if (closest_index > original_path.size() - 20)
 	{
 		closest_index = 2;
 	}
+	goal_index=closest_index;
 	return closest_index;
+}
+void boolCallback(const std_msgs::Bool::ConstPtr& msg)
+{
+    need_stop= msg->data ;
 }
 static void pathCallback(const nav_msgs::Path::ConstPtr &path_msg)
 {
@@ -94,7 +98,6 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr &odom_msg, tf2_ros::Buffer 
 
 	try
 	{
-
 		tf2::Quaternion quat;
 		quat.setX(odom_msg->pose.pose.orientation.x);
 		quat.setY(odom_msg->pose.pose.orientation.y);
@@ -131,7 +134,6 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr &odom_msg, tf2_ros::Buffer 
 			tf2::doTransform(pose, transformed_pose, transform);
 			transformed_path.poses.push_back(transformed_pose);
 		}
-		
 		convertPathToXRef(transformed_path);
 		transformed_path_pub.publish(transformed_path);
 	}
@@ -149,6 +151,7 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr &odom_msg, tf2_ros::Buffer 
 	odom_path_pub.publish(odom_path);
 }
 
+
 int main(int argc, char **argv)
 {
 	ros::init(argc, argv, "mpc_node");
@@ -160,8 +163,9 @@ int main(int argc, char **argv)
 	transformed_path_pub = n.advertise<nav_msgs::Path>("/transformed_path", 100);
 	odom_path_pub = n.advertise<nav_msgs::Path>("/odom_path", 100);
 	pre_path_pub = n.advertise<nav_msgs::Path>("/pre_path", 100);
-	ros::Subscriber scan_sub = n.subscribe("/scan", 1, scanCallback);
+
 	refer_path_sub = n.subscribe<nav_msgs::Path>("/trajectory", 100, pathCallback);
+	need_stop_sub_ = n.subscribe("/ipc/need_stop", 100, boolCallback);
 	odom_sub = n.subscribe<nav_msgs::Odometry>(
 		"/odom", 100, boost::bind(odomCallback, _1, boost::ref(tf_buffer)));
 
@@ -187,20 +191,22 @@ int main(int argc, char **argv)
 	out << 0, 0;
 	ros::Rate loop_rate(10);
 
-	const double Kp = 0.5;
+	const double Kp = 0.8;
 	while (ros::ok())
 	{
-		if (roll <= PI / 6 && roll >= -PI / 6 && pitch <= PI / 6 && pitch >= -PI / 6)
+	        if (need_stop){
+	              ROS_WARN("has obs");
+	        }
+		if ((roll <= PI / 6 && roll >= -PI / 6 && pitch <= PI / 6 && pitch >= -PI / 6)&&!need_stop)
 		{
 			if (xref.size() > 0)
 			{
 
 				double yaw_error = xref.at(0)[2];
-				// if (yaw_error < PI / 3 && yaw_error > -PI / 3)
 				if (yaw_error < PI / 3 && yaw_error > -PI / 3)
 				{
 					MPC_problem<STATE_NUM, CTRL_NUM, MPC_WINDOW> MPC_Solver(Q, R, xMax, xMin, uMax, uMin);
-					MPC_Solver.set_x_xref(x0, out, xref); // out0 has no use
+					MPC_Solver.set_x_xref(x0, out, xref);
 					out = MPC_Solver.Solver();
 					geometry_msgs::Twist vel_msg;
 					vel_msg.linear.x = out(STATE_NUM * (MPC_WINDOW + 1));

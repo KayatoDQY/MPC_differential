@@ -19,11 +19,13 @@ find_package(catkin REQUIRED COMPONENTS
   tf2
   tf2_ros
   sensor_msgs
+  visualization_msgs
   
 )
 find_package(PCL REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(OsqpEigen REQUIRED)
+find_package(OpenCV 4.5 REQUIRED)
 
 
 catkin_package(
@@ -37,6 +39,7 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   ${Eigen3_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
 )
 add_executable(mpc_node
   src/mpc_node.cc
@@ -45,11 +48,40 @@ add_dependencies(mpc_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_
 target_link_libraries(mpc_node
   ${catkin_LIBRARIES}
   ${EIGEN3_LIBRARIES}
+  ${OpenCV_LIBRARIES}
   ${PCL_LIBRARIES}
   OsqpEigen::OsqpEigen
 )
 
-catkin_install_python(PROGRAMS
-  src/trajectory_publisher.py
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+add_executable(grid_map
+  src/grid_map.cc
+)
+add_dependencies(grid_map ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(grid_map
+  ${catkin_LIBRARIES}
+  ${EIGEN3_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+  ${PCL_LIBRARIES}
+)
+
+add_executable(Astar
+  src/Astar.cc
+)
+add_dependencies(Astar ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(Astar
+  ${catkin_LIBRARIES}
+  ${EIGEN3_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+  ${PCL_LIBRARIES}
+)
+add_executable(sdc
+  src/SDC.cc
+)
+add_dependencies(sdc ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(sdc
+  ${catkin_LIBRARIES}
+  ${EIGEN3_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+  ${PCL_LIBRARIES}
+  OsqpEigen::OsqpEigen
 )

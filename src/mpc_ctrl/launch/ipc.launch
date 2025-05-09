@@ -1,0 +1,23 @@
+<launch>
+    <node pkg="mpc_ctrl" type="grid_map" name="ipc" output="screen">
+        <remap from="/ipc/lidar" to="/livox/lidar"/>
+        <param name="resolution"          type="double" value="0.05" />
+        <param name="grid_width"         type="double" value="16.0" />
+        <param name="grid_height"        type="double" value="16.0" />
+        <param name="origin_x"           type="double" value="-8.0" />
+        <param name="origin_y"           type="double" value="-8.0" />
+        <param name="inflation_radius"   type="double" value="0.40" />
+
+        <param name="crop_x_min"         type="double" value="-8.0" />
+        <param name="crop_y_min"         type="double" value="-8.0" />
+        <param name="crop_z_min"         type="double" value="0" />
+        <param name="crop_x_max"         type="double" value="8.0" />
+        <param name="crop_y_max"         type="double" value="8.0" />
+        <param name="crop_z_max"         type="double" value="0.4" />
+        
+        <param name="radius"         type="double" value="0.15" />
+        <param name="neighbors"         type="double" value="5.0" />
+
+    </node>
+    <node pkg="mpc_ctrl" type="Astar" name="Astar" output="screen" />
+</launch>

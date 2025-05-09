@@ -9,7 +9,7 @@ import atexit
 class OdomRecorder:
     def __init__(self):
         rospy.init_node('odom_recorder', anonymous=True)
-        self.file_path = os.path.expanduser("~/odom_data.csv")
+        self.file_path = os.path.expanduser("~/odom_data1.csv")
         self.odom_data = []
         self.sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
         atexit.register(self.save_to_csv)
