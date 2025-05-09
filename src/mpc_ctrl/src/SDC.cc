@@ -262,7 +262,6 @@ int main(int argc, char **argv)
                                     }
                                 }
 
-                                // 如果原图像素是白色且满足约束，才覆盖颜色
                                 if (satisfies_all)
                                 {
                                     color_image.at<cv::Vec3b>(y, x) = cv::Vec3b(
@@ -289,10 +288,9 @@ int main(int argc, char **argv)
             std::vector<Eigen::VectorXd> b_mpc;
             std::vector<Eigen::Matrix<double, STATE_NUM, 1>> xref;
             double x_r, y_r, yaw_r;
-            // 初始化前一个点的坐标为车辆的当前位置或路径的初始前一个点
-            double prev_x = 0;   // 假设current_x_是当前车辆x坐标
-            double prev_y = 0;   // 假设current_y_是当前车辆y坐标
-            double prev_yaw = 0; // 假设current_yaw_是当前车辆偏航角
+            double prev_x = 0;
+            double prev_y = 0;
+            double prev_yaw = 0;
 
             for (auto step = 0; step < MPC_WINDOW; step++)
             {
@@ -302,29 +300,23 @@ int main(int argc, char **argv)
                 Eigen::VectorXd b_r;
                 deal_path.find_step(step, A_r_0, b_r_0, x_r, y_r);
 
-                // 计算当前点的yaw_r
                 if (step == 0)
                 {
-                    // 第一个点，使用初始prev_x和prev_y计算yaw_r
+                  
                     yaw_r = atan2(y_r - prev_y, x_r - prev_x);
                 }
                 else if (step == MPC_WINDOW - 1)
                 {
-                    // 最后一个点，使用前一个点的yaw_r
                     yaw_r = prev_yaw;
                 }
                 else
                 {
-                    // 中间点，使用前一个点坐标计算yaw_r
                     yaw_r = atan2(y_r - prev_y, x_r - prev_x);
                 }
-
-                // 更新前一个点的坐标和yaw
                 prev_x = x_r;
                 prev_y = y_r;
                 prev_yaw = yaw_r;
 
-                // 以下为原有的矩阵处理逻辑
                 A_r = (A_r_0 / map_meta_.resolution).transpose();
                 b_r = b_r_0 + A_r_0.transpose() * Eigen::Vector2d(map_meta_.origin_x, map_meta_.origin_y) / map_meta_.resolution;
 
